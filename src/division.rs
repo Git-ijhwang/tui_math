@@ -1,5 +1,6 @@
 use rand::RngExt;
 
+#[derive(Clone)]
 pub struct Problem {
     pub dividend: u32,  //피제수 (나누어지는 수)
     pub divisor: u32,   //제수 (나누는 수)
