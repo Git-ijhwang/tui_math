@@ -20,7 +20,13 @@ use ratatui::{
 };
 
 mod division;
-use division::Problem;
+use division::{Problem, Difficulty};
+
+#[derive(Clone, Copy)]
+enum InputField {
+    Quotient,
+    Remainder,
+}
 
 enum Mode {
     Asking,
@@ -29,70 +35,142 @@ enum Mode {
     },
 }
 
+enum QuizScreen {
+    Setup,
+    Playing {
+        mode: Mode
+    },
+}
 struct Attempt {
     problem: Problem,
-    user_answer: u32,
+    user_quotient: u32,
+    user_remainder: u32,
 }
 
 impl Attempt {
     fn is_correct(&self) -> bool {
-        self.user_answer == self.problem.answer
+        self.user_quotient == self.problem.quotient &&
+        self.user_remainder == self.problem.remainder
     }
 }
 
 struct App {
     problem: Problem,
-    input: String,
-    mode: Mode,
+    input_quotient: String,
+    input_remainder: String,
+    // mode: Mode, //Mode 열거형을 QuizScreen::Playing 안으로 이동하여 모드 상태를 좀 더 명확하게 표현.
+    focus: InputField,
     history: Vec<Attempt>,
+    difficulty: Difficulty,
+    screen: QuizScreen,
 }
 
 impl App {
     fn new() -> Self {
+        let difficulty = Difficulty::Easy; //기본 난이도 설정. 나중에 사용자 선택으로 확장 가능.
         Self {
-            problem: Problem::new(),
-            input: String::new(),
-            mode: Mode::Asking, //처음에는 문제를 묻는 모드로 시작
+            problem: Problem::new(difficulty), //앱 초기화 시 첫 문제 생성. 난이도 전달.
+            input_quotient: String::new(),
+            input_remainder: String::new(),
+            focus: InputField::Quotient, //처음에는 몫 입력 필드에 포커스.
+            // mode: Mode::Asking, //처음에는 문제를 묻는 모드로 시작
             history: Vec::new(),
+            difficulty,
+            screen: QuizScreen::Setup, //처음에는 설정 화면으로 시작. 나중에 난이도 선택 기능 추가 가능.
         }
     }
 
     //숫자 한 글자 추가( 입력이 너무 길어지지 않게 최대 자릿수 제한.
     fn push_digit(&mut self, c: char) {
+        let buf = match self.focus {
+            InputField::Quotient => &mut self.input_quotient,
+            InputField::Remainder => &mut self.input_remainder,
+        };
 
-        if self.input.len() < 3 {
-            self. input.push(c);
+        if buf.len() < 3 {
+            buf.push(c);
         }
     }
 
     //숫자 한 글자 제거 (백스페이스 기능)
     fn pop_digit(&mut self) {
-        self.input.pop();
+        let buf = match self.focus {
+            InputField::Quotient => &mut self.input_quotient,
+            InputField::Remainder => &mut self.input_remainder,
+        };
+        buf.pop();
+    }
+
+    fn confirm(&mut self) {
+        match self.difficulty {
+            Difficulty::Easy => self.submit(),
+            Difficulty::Hard => match self.focus {
+                InputField::Quotient => {
+                    if !self.input_quotient.is_empty() {
+                        self.focus = InputField::Remainder; //몫 입력이 완료되면 나머지 입력으로 포커스 이동.
+                    }
+                }
+                InputField::Remainder => self.submit(), //나머지 임력후, 제출.
+            },
+        }
     }
 
     fn submit (&mut self ) {
-        if self.input.is_empty() {
+        if self.input_quotient.is_empty() {
             return; //입력이 비어있으면 제출 무시.
         }
 
+        if self.difficulty.has_remainder() && self.input_remainder.is_empty() {
+            return;
+        }
+
         // 문자열 -> u32 변환. 숫자만 받았으니 실패하지 않지만 unwrap() 대신 unwrap_or()로 명확한 에러 메시지 제공.
-        let user_answer: u32 = self.input.parse()
+        let user_q: u32 = self.input_quotient.parse()
             .unwrap_or(u32::MAX);
-        let correct = user_answer == self.problem.answer; //사용자 답과 정답 비교.
+        let user_r: u32 = if self.difficulty.has_remainder() {
+            self.input_remainder.parse()
+                .unwrap_or(u32::MAX)
+        }
+        else {
+            0
+        };
+
+        let correct = user_q == self.problem.quotient &&
+            user_r == self.problem.remainder;
 
         //풀이 기록에 추가.
         self.history.push(Attempt {
             problem: self.problem.clone(), //현재 문제 복사해서 저장.
-            user_answer, //사용자 답 저장.
+            user_quotient: user_q,
+            user_remainder: user_r,
         });
 
-        self.mode = Mode::ShowingResult { correct }; //결과 보여주는 모드로 전환.
+        // self.mode = Mode::ShowingResult { correct }; //결과 보여주는 모드로 전환.
+        // mode 상태를 QuizScreen::Playing 안으로 이동하여 좀 더 명확하게 표현.
+        self.screen = QuizScreen::Playing {
+            mode: Mode::ShowingResult { correct },
+        };
+    }
+
+    fn start (&mut self, difficulty: Difficulty) {
+        self.difficulty = difficulty;
+        self.problem = Problem::new(difficulty); //새 문제 생성.
+        self.input_quotient.clear();
+        self.input_remainder.clear();
+        self.focus = InputField::Quotient;//포커스 초기화.
+        self.screen = QuizScreen::Playing {
+            mode: Mode::Asking,
+        };
     }
 
     fn next_problem(&mut self) {
-        self.problem = Problem::new(); //새 문제 생성.
-        self.input.clear(); //입력 초기화.
-        self.mode = Mode::Asking; //문제 묻는 모드로 전환.
+        self.problem = Problem::new(self.difficulty);
+        self.input_quotient.clear();
+        self.input_remainder.clear();
+        self.focus = InputField::Quotient;//포커스 초기화.
+        self.screen = QuizScreen::Playing {
+            mode: Mode::Asking
+        }; //문제 묻는 모드로 전환.
     }
 
     //맞힌 개수 세는 메서드.
@@ -163,53 +241,139 @@ fn run_app<B: ratatui::backend::Backend>( terminal: &mut Terminal<B>,
             // 왼쪽 아래 영역: 문제 표시
             let question = app.problem.question_text(); //문제 생성.
 
-            let left_lines: Vec<Line> = match &app.mode {
-                Mode::Asking => {
-                    let input_display = if app.input.is_empty() {
-                        "_".to_string() //입력이 비어있으면 밑줄로 표시.
+            let left_lines: Vec<Line> = match &app.screen {
+                QuizScreen::Setup => {
+                    vec! [
+                        Line::from(""),
+                        Line::from(""),
+                        Line::from("Select Difficulty"),
+                        Line::from(""),
+                        Line::from("1. Easy Mode (no remainder)"),
+                        Line::from("2. Hard Mode (with remainder)"),
+                        Line::from(""),
+                        Line::from("Press 1 or 2 to start"),
+                    ]
+                }
+
+
+                QuizScreen::Playing { mode }=> {
+                    let question = app.problem.question_text();
+
+                    match mode {
+                        Mode::Asking => {
+                            // let input_display = if app.input.is_empty() {
+                            //     "_".to_string() //입력이 비어있으면 밑줄로 표시.
+                            // }
+                            // else {
+                            //     app.input.clone() //입력이 있으면 그대로 표시.
+                            // };
+
+                            let mut v: Vec<Line> = question
+                                .lines()
+                                .map(|s| Line::from(s.to_string()))
+                                .collect();
+
+                            v.push(Line::from("")); //문제와 입력 사이의 빈 줄.
+                            // v.push(Line::from(format!("Your Answer: {}", input_display))); //사용자 입력 상태 표시.
+                            match app.difficulty {
+                                Difficulty::Easy => {
+                                    let q_display = if app.input_quotient.is_empty() {
+                                        "_".to_string() //입력이 비어있으면 밑줄로 표시.
+                                    }
+                                    else {
+                                        app.input_quotient.clone() //입력이 있으면 그대로 표시.
+                                    };
+                                    v.push(Line::from(format!("Your Answer: {}", q_display))); //사용자 입력 상태 표시.
+                                }
+                                Difficulty::Hard => {
+                                    // let q_display = if app.input_quotient.is_empty() {
+                                    //     "_".to_string() //입력이 비어있으면 밑줄로 표시.
+                                    // }
+                                    // else {
+                                    //     app.input_quotient.clone() //입력이 있으면 그대로 표시.
+                                    // };
+
+                                    // let r_display = if app.input_remainder.is_empty() {
+                                    //     "_".to_string() //입력이 비어있으면 밑줄로 표시.
+                                    // }
+                                    // else {
+                                    //     app.input_remainder.clone() //입력이 있으면 그대로 표시.
+                                    // };
+
+                                    let q_display = display_with_focus(
+                                        &app.input_quotient,
+                                        matches!(app.focus, InputField::Quotient),
+                                    );
+                                    let r_display = display_with_focus(
+                                        &app.input_remainder,
+                                        matches!(app.focus, InputField::Remainder),
+                                    );
+                                    match app.focus {
+                                        InputField::Quotient => {
+                                            // q_display = display_with_focus(&app.input_quotient, true);
+                                            // r_display = display_with_focus(&app.input_remainder, false);
+                                    v.push(Line::from(format!("Your Answer for Quotient: {}", q_display))); //사용자 입력 상태 표시.
+                                        }
+                                        InputField::Remainder => {
+                                            // q_display = display_with_focus(&app.input_quotient, false);
+                                            // r_display = display_with_focus(&app.input_remainder, true);
+                                    v.push(Line::from(format!("Your Answer for Remainder: {}", r_display))); //사용자 입력 상태 표시.
+                                        }
+                                    }
+                                }
+                            }
+                            v.push(Line::from(""));
+                            let hint = match app.difficulty {
+                                Difficulty::Easy => "Press Enter to submit",
+                                Difficulty::Hard => match app.focus {
+                                    InputField::Quotient => "Enter quotient, then press Enter",
+                                    InputField::Remainder => "Enter remainder, then press Enter",
+                                },
+                            };
+                            v.push(Line::from(hint));
+                            v
+                        }
+
+                        Mode::ShowingResult { correct } => {
+                            //정답 여부에 따라 결과 메시지 생성
+                            let (text, color) = if *correct {
+                                ("Correct!".to_string(), Color::Green)
+                            } else {
+                                (
+                                    match app.difficulty {
+                                        Difficulty::Easy => format!("Wrong! The correct answer is {}", app.problem.quotient),
+                                        Difficulty::Hard => format!(
+                                            "Wrong! The correct answer is {} R {}",
+                                                app.problem.quotient, app.problem.remainder
+                                            ),
+                                        },
+                                    // format!("Wrong! The correct answer is {}", app.problem.answer),
+                                    Color::Red
+                                )
+                            };
+
+                            let mut v: Vec<Line> = question
+                                .lines()
+                                .map(|s| Line::from(s.to_string()))
+                                .collect();
+                            v.push(Line::from(""));
+
+                            let your = match app.difficulty {
+                                Difficulty::Easy => format!("Your answer: {}", app.input_quotient),
+                                Difficulty::Hard => format!(
+                                    "Your answer: Q:{}, R:{}",
+                                    app.input_quotient, app.input_remainder),
+                            };
+                            v.push(Line::from(your));
+                            v.push(Line::from(""));
+                                // Span으로 감싸 색상 적용
+                            v.push(Line::from(Span::styled(text, Style::default().fg(color))));
+                            v.push(Line::from(""));
+                            v.push(Line::from("Press Enter for next problem"));
+                            v
+                        }
                     }
-                    else {
-                        app.input.clone() //입력이 있으면 그대로 표시.
-                    };
-
-                    let mut v: Vec<Line> = question
-                        .lines()
-                        .map(|s| Line::from(s.to_string()))
-                        .collect();
-
-                    v.push(Line::from("")); //문제와 입력 사이의 빈 줄.
-                    v.push(Line::from(format!("Your Answer: {}", input_display))); //사용자 입력 상태 표시.
-                    v.push(Line::from(""));
-                    v.push(Line::from("Press Enter to submit"));
-                    v
                 }
-
-                Mode::ShowingResult { correct } => {
-                    //정답 여부에 따라 결과 메시지 생성
-                    let (text, color) = if *correct {
-                        ("Correct!".to_string(), Color::Green)
-                    } else {
-                        (
-                            format!("Wrong! The correct answer is {}", app.problem.answer),
-                            Color::Red
-                        )
-                    };
-
-                    let mut v: Vec<Line> = question
-                        .lines()
-                        .map(|s| Line::from(s.to_string()))
-                        .collect();
-                    v.push(Line::from(""));
-                    v.push(Line::from(format!("Your answer: {}", app.input)));
-                    v.push(Line::from(""));
-                        // Span으로 감싸 색상 적용
-                    v.push(Line::from(Span::styled(text, Style::default().fg(color))));
-                    v.push(Line::from(""));
-                    v.push(Line::from("Press Enter for next problem"));
-                    v
-                }
-            };
-
             // let input_display = if app.input.is_empty() {
             //     "_".to_string()
             // }
@@ -219,6 +383,7 @@ fn run_app<B: ratatui::backend::Backend>( terminal: &mut Terminal<B>,
 
             // let body = format!("{}\n\nYour Answer: {}", question, input_display); //문제와 입력 상태를 하나의 문자열로 합치기.
 
+            };
             let quiz_block = Block::default() //블록 위젯 생성.
                 .title(" Terminal UI Math Game ") //블록 제목 설정.
                 .borders(Borders::ALL); //모든 테두리 표시.
@@ -243,22 +408,39 @@ fn run_app<B: ratatui::backend::Backend>( terminal: &mut Terminal<B>,
                         ("✗", Color::Red)
                     };
 
-                    let text = if entry.is_correct() {
-                        format!("{}  {} ÷ {} = {}",
-                            mark,
+                    let problem_str = if entry.problem.remainder == 0 {
+                        format!("{} ÷ {} = {}",
                             entry.problem.dividend,
                             entry.problem.divisor,
-                            entry.problem.answer
+                            entry.problem.quotient
                         )
-                    } else {
-                        format!("{}  {} ÷ {} = {}, your answer: {}",
-                            mark,
+                    }
+                    else {
+                        format!("{} ÷ {} = {}, R:{}",
                             entry.problem.dividend,
                             entry.problem.divisor,
-                            entry.problem.answer,
-                            entry.user_answer
+                            entry.problem.quotient,
+                            entry.problem.remainder
                         )
                     };
+
+                    let text = if entry.is_correct() { //맞힌 문제는 사용자 답 대신 문제 자체를 보여줌
+                        format!("{} {}", mark, problem_str)
+                    }
+                    else { //틀린 문제는 사용자 답과 함께 보여줌
+                        let user_input = if entry.problem.remainder == 0 {
+                            format!("{}", entry.user_quotient)
+                        }
+                        else {
+                            format!("{} R:{}",
+                                entry.user_quotient,
+                                entry.user_remainder
+                            )
+                        };
+
+                        format!("{} {} (Your answer: {})", mark, problem_str, user_input)
+                    };
+
                     Line::from(Span::styled(text, Style::default().fg(color)))
                 })
                 .collect();
@@ -285,18 +467,26 @@ fn run_app<B: ratatui::backend::Backend>( terminal: &mut Terminal<B>,
 
 
             //mode별 동작 처리
-            match &app.mode {
-                Mode::Asking => match key.code {
-                    KeyCode::Char(c) if c.is_ascii_digit() => app.push_digit(c),
-                    KeyCode::Backspace => app.pop_digit(),
-                    KeyCode::Enter => app.submit(),
-                    _ => {}
+            match &app.screen {
+                QuizScreen::Setup => match key.code {
+                    KeyCode::Char('1') => app.start(Difficulty::Easy),
+                    KeyCode::Char('2') => app.start(Difficulty::Hard),
+                    _ => {} //설정 화면에서는 1과 2 외의 입력은 무시.
                 },
 
-                Mode::ShowingResult { .. } => match key.code {
-                    KeyCode::Enter => app.next_problem(),
-                    _ => {} //결과 보여주는 모드에서는 Enter와 q 외에는 다른 입력 무시.
-                },
+                QuizScreen::Playing {mode } => match mode {
+                    Mode::Asking => match key.code {
+                        KeyCode::Char(c) if c.is_ascii_digit() => app.push_digit(c),
+                        KeyCode::Backspace => app.pop_digit(),
+                        KeyCode::Enter => app.confirm(),
+                        _ => {}
+                    },
+
+                    Mode::ShowingResult { .. } => match key.code {
+                        KeyCode::Enter => app.next_problem(),
+                        _ => {} //결과 보여주는 모드에서는 Enter와 q 외에는 다른 입력 무시.
+                    },
+                }
             }
         }
     }
@@ -324,3 +514,13 @@ fn main() -> io::Result<()>{
     result // run_app의 결과 반환. 성공 시 Ok(()), 에러 시 Err(e) 형태.
 }
 
+fn display_with_focus(buf: &str, focused: bool) -> String {
+    if buf.is_empty() { //입력이 비어있으면 포커스 여부에 따라 밑줄 또는 공백 표시.
+        // if focused { "_".to_string()} //포커스가 있으면 밑줄 표시.
+        // else { " ".to_string()} //포커스가 없으면 공백 표시.
+        "_".to_string() //포커스 여부와 상관없이 입력이 비어있으면 밑줄로 표시.
+    }
+    else { //입력이 있으면 그대로 표시.
+        buf.to_string()
+    }
+}
