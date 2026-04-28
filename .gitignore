@@ -1,0 +1,13 @@
+# Rust 빌드 산출물
+/target
+
+# 백업 파일
+**/*.rs.bk
+
+# IDE 설정 (선택)
+.idea/
+.vscode/
+
+# OS 부산물 (선택)
+.DS_Store
+Thumbs.db
