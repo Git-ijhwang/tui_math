@@ -15,14 +15,23 @@ use ratatui::{
     Terminal,
     prelude::Backend, //Backend 트레이트를 가져와서 run_app 함수에서 제네릭으로 사용할 수 있도록 함.
     layout::Alignment, // Alignment 열거형을 가져와서 텍스트 정렬에 사용할 수 있도록 함.
+    style::{Color, Style},
+    text::{Line, Span},
 };
 
 mod division;
 use division::Problem;
 
+enum Mode {
+    Asking,
+    ShowingResult {
+        correct: bool
+    },
+}
 struct App {
     problem: Problem,
-    input: String
+    input: String,
+    mode: Mode,
 }
 
 impl App {
@@ -30,6 +39,7 @@ impl App {
         Self {
             problem: Problem::new(),
             input: String::new(),
+            mode: Mode::Asking, //처음에는 문제를 묻는 모드로 시작
         }
     }
 
@@ -44,6 +54,24 @@ impl App {
     //숫자 한 글자 제거 (백스페이스 기능)
     fn pop_digit(&mut self) {
         self.input.pop();
+    }
+
+    fn submit (&mut self ) {
+        if self.input.is_empty() {
+            return; //입력이 비어있으면 제출 무시.
+        }
+
+        // 문자열 -> u32 변환. 숫자만 받았으니 실패하지 않지만 unwrap() 대신 unwrap_or()로 명확한 에러 메시지 제공.
+        let user_answer: u32 = self.input.parse()
+            .unwrap_or(u32::MAX);
+        let correct = user_answer == self.problem.answer; //사용자 답과 정답 비교.
+        self.mode = Mode::ShowingResult { correct }; //결과 보여주는 모드로 전환.
+    }
+
+    fn next_problem(&mut self) {
+        self.problem = Problem::new(); //새 문제 생성.
+        self.input.clear(); //입력 초기화.
+        self.mode = Mode::Asking; //문제 묻는 모드로 전환.
     }
 }
 
@@ -61,20 +89,68 @@ fn run_app<B: ratatui::backend::Backend>( terminal: &mut Terminal<B>,
             let area = frame.area(); //현재 전체 화면의 크기 가져오기.
 
             let question = app.problem.question_text(); //문제 생성.
-            let input_display = if app.input.is_empty() {
-                "_".to_string()
-            }
-            else {
-                app.input.clone()
+
+            let lines: Vec<Line> = match &app.mode {
+                Mode::Asking => {
+                    let input_display = if app.input.is_empty() {
+                        "_".to_string() //입력이 비어있으면 밑줄로 표시.
+                    }
+                    else {
+                        app.input.clone() //입력이 있으면 그대로 표시.
+                    };
+
+                    let mut v: Vec<Line> = question
+                        .lines()
+                        .map(|s| Line::from(s.to_string()))
+                        .collect();
+                    v.push(Line::from("")); //문제와 입력 사이의 빈 줄.
+                    v.push(Line::from(format!("Your Answer: {}", input_display))); //사용자 입력 상태 표시.
+                    v.push(Line::from(""));
+                    v.push(Line::from("Press Enter to submit"));
+                    v
+                }
+
+                Mode::ShowingResult { correct } => {
+                    //정답 여부에 따라 결과 메시지 생성
+                    let (text, color) = if *correct {
+                        ("Correct!".to_string(), Color::Green)
+                    } else {
+                        (
+                            format!("Wrong! The correct answer is {}", app.problem.answer),
+                            Color::Red
+                        )
+                    };
+
+                    let mut v: Vec<Line> = question
+                        .lines()
+                        .map(|s| Line::from(s.to_string()))
+                        .collect();
+                    v.push(Line::from(""));
+                    v.push(Line::from(format!("Your answer: {}", app.input)));
+                    v.push(Line::from(""));
+                        // Span으로 감싸 색상 적용
+                    v.push(Line::from(Span::styled(text, Style::default().fg(color))));
+                    v.push(Line::from(""));
+                    v.push(Line::from("Press Enter for next problem"));
+                    v
+                }
             };
 
-            let body = format!("{}\n\nYour Answer: {}", question, input_display); //문제와 입력 상태를 하나의 문자열로 합치기.
+            // let input_display = if app.input.is_empty() {
+            //     "_".to_string()
+            // }
+            // else {
+            //     app.input.clone()
+            // };
+
+            // let body = format!("{}\n\nYour Answer: {}", question, input_display); //문제와 입력 상태를 하나의 문자열로 합치기.
 
             let block = Block::default() //블록 위젯 생성.
-                .title("Terminal UI Math Game") //블록 제목 설정.
+                .title(" Terminal UI Math Game ") //블록 제목 설정.
                 .borders(Borders::ALL); //모든 테두리 표시.
 
-            let paragraph = Paragraph::new("Press 'q' to quit") //Text 위젯 생성. 위에서 만든 박스를 배경으로 적용.
+            let paragraph = Paragraph::new(lines) //Text 위젯 생성. 위에서 만든 body 출력.
+                .alignment(Alignment::Center) //텍스트 중앙 정렬..
                 .block(block); // 위젯을 블록에 추가.
 
             frame.render_widget(paragraph, area); //위젯을 화면 전체에 렌더링.
@@ -88,19 +164,24 @@ fn run_app<B: ratatui::backend::Backend>( terminal: &mut Terminal<B>,
                 continue; //Press 이벤트가 아니면 무시하고 다음 루프로 넘어감.
             }
 
-            match key.code {
-                KeyCode::Char('q') => return Ok(()), // 'q' 키가 눌리면 루프 탈출하여 앱 종료.
+            if let KeyCode::Char('q') = key.code {
+                return Ok(()); // 'q' 키가 눌리면 앱 종료.
+            }
 
-                KeyCode::Char(c) if c.is_ascii_digit() => {
-                    app.push_digit(c);
-                }
 
-                KeyCode::Backspace => {
-                    app.pop_digit();
-                }
+            //mode별 동작 처리
+            match &app.mode {
+                Mode::Asking => match key.code {
+                    KeyCode::Char(c) if c.is_ascii_digit() => app.push_digit(c),
+                    KeyCode::Backspace => app.pop_digit(),
+                    KeyCode::Enter => app.submit(),
+                    _ => {}
+                },
 
-                //그 외의 키는 무시. 예: 방향키, 엔터키 등
-                _ => {}
+                Mode::ShowingResult { .. } => match key.code {
+                    KeyCode::Enter => app.next_problem(),
+                    _ => {} //결과 보여주는 모드에서는 Enter와 q 외에는 다른 입력 무시.
+                },
             }
         }
     }
