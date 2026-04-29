@@ -60,7 +60,7 @@ impl Problem {
                     remainder,
                 }
             } //어려운 난이도는 10~99 사이의 숫자 사용.
-        }
+        } 
 
     }
 
